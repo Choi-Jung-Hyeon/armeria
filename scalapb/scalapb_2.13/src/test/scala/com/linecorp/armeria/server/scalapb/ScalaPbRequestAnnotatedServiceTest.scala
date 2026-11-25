@@ -17,7 +17,7 @@
 package com.linecorp.armeria.server.scalapb
 
 import com.linecorp.armeria.client.WebClient
-import com.linecorp.armeria.common.{AggregatedHttpResponse, HttpMethod, HttpRequest, MediaType}
+import com.linecorp.armeria.common.{AggregatedHttpResponse, HttpMethod, HttpRequest, HttpStatus, MediaType}
 import com.linecorp.armeria.internal.testing.GenerateNativeImageTrace
 import com.linecorp.armeria.server.ServerBuilder
 import com.linecorp.armeria.server.annotation.{ConsumesJson, ConsumesProtobuf, Post}
@@ -92,6 +92,37 @@ class ScalaPbRequestAnnotatedServiceTest {
     val request: HttpRequest = HttpRequest.of(HttpMethod.POST, path, MediaType.JSON, jsonObject)
     val response: AggregatedHttpResponse = client.execute(request).aggregate.join
     assertThat(response.contentUtf8).isEqualTo("OK")
+  }
+
+  @Test
+  def invalidProtobufRequest(): Unit = {
+    // A truncated varint tag.
+    val invalidProtobuf = Array(0xff.toByte, 0xff.toByte)
+    var response = client.post("/default-content-type", invalidProtobuf).aggregate.join
+    assertThat(response.status).isEqualTo(HttpStatus.BAD_REQUEST)
+
+    val request = HttpRequest.of(HttpMethod.POST, "/protobuf", MediaType.PROTOBUF, invalidProtobuf)
+    response = client.execute(request).aggregate.join
+    assertThat(response.status).isEqualTo(HttpStatus.BAD_REQUEST)
+  }
+
+  @CsvSource(
+    delimiter = '|',
+    value = Array(
+      "/json         | \"payload\":\"Armeria\"}",
+      "/json         | {\"payload\": {}}",
+      "/json+array   | [{",
+      "/json+array   | [{\"size\": \"one\"}]",
+      "/json+array2  | [{\"size\": \"one\"}]",
+      "/json+object  | {\"json1\":",
+      "/json+object  | {\"json1\": {\"size\": \"one\"}}"
+    )
+  )
+  @ParameterizedTest
+  def invalidJsonRequest(path: String, invalidJson: String): Unit = {
+    val request = HttpRequest.of(HttpMethod.POST, path, MediaType.JSON, invalidJson)
+    val response = client.execute(request).aggregate.join
+    assertThat(response.status).isEqualTo(HttpStatus.BAD_REQUEST)
   }
 }
 

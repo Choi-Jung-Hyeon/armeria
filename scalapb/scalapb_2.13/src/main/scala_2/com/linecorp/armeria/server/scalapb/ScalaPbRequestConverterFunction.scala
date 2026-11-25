@@ -20,9 +20,10 @@ import java.lang.invoke.{MethodHandle, MethodHandles, MethodType}
 import java.lang.reflect.{ParameterizedType, Type}
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentMap
+import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
 import com.google.common.collect.{ImmutableList, ImmutableMap, ImmutableSet, MapMaker}
-import com.google.protobuf.CodedInputStream
+import com.google.protobuf.{CodedInputStream, InvalidProtocolBufferException}
 import com.linecorp.armeria.common.AggregatedHttpRequest
 import com.linecorp.armeria.common.annotation.{Nullable, UnstableApi}
 import com.linecorp.armeria.server.ServiceRequestContext
@@ -31,7 +32,7 @@ import com.linecorp.armeria.server.scalapb.ResultType._
 import com.linecorp.armeria.server.scalapb.ScalaPbConverterUtil._
 import com.linecorp.armeria.server.scalapb.ScalaPbRequestConverterFunction._
 
-import scalapb.json4s.Parser
+import scalapb.json4s.{JsonFormatException, Parser}
 import scalapb.{GeneratedMessage, GeneratedMessageCompanion, GeneratedSealedOneof}
 
 /**
@@ -214,6 +215,9 @@ final class ScalaPbRequestConverterFunction private (jsonParser: Parser, resultT
             .merge(getDefaultInstance(expectedResultType), CodedInputStream.newInstance(is))
             .asInstanceOf[GeneratedMessage]
           return toGenerateMessageOrOneof(expectedResultType, message).asInstanceOf[Object]
+        } catch {
+          case e: InvalidProtocolBufferException =>
+            throw new IllegalArgumentException("failed to parse a Protobuf message: " + e, e)
         } finally {
           if (is != null) {
             is.close()
@@ -245,7 +249,11 @@ final class ScalaPbRequestConverterFunction private (jsonParser: Parser, resultT
       jsonString: String,
       typeArguments: Array[Type],
       resultType: ResultType.Value): AnyRef = {
-    val jsonNode = mapper.readTree(jsonString)
+    val jsonNode =
+      try mapper.readTree(jsonString)
+      catch {
+        case e: JsonProcessingException => throw newJsonConversionException(e)
+      }
     val size = jsonNode.size
     val numTypes = typeArguments.length
 
@@ -320,7 +328,14 @@ final class ScalaPbRequestConverterFunction private (jsonParser: Parser, resultT
    */
   private def jsonToScalaPbMessage(expectedResultType: Class[_], json: String): Any with Serializable = {
     val messageType = extractGeneratedMessageType(expectedResultType)
-    val message: GeneratedMessage = jsonParser.fromJsonString(json)(getCompanion(messageType))
+    val message: GeneratedMessage =
+      try jsonParser.fromJsonString(json)(getCompanion(messageType))
+      catch {
+        case e @ (_: JsonProcessingException | _: JsonFormatException) => throw newJsonConversionException(e)
+      }
     toGenerateMessageOrOneof(expectedResultType, message)
   }
+
+  private def newJsonConversionException(cause: Throwable): IllegalArgumentException =
+    new IllegalArgumentException("failed to parse a JSON document: " + cause, cause)
 }

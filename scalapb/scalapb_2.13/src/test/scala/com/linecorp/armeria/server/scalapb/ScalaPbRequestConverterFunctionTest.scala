@@ -16,19 +16,21 @@
 
 package com.linecorp.armeria.server.scalapb
 
+import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.core.`type`.TypeReference
 import com.google.common.collect.{ImmutableList, ImmutableMap, ImmutableSet}
+import com.google.protobuf.InvalidProtocolBufferException
 import com.linecorp.armeria.common._
 import com.linecorp.armeria.server.ServiceRequestContext
 import com.linecorp.armeria.server.annotation.FallthroughException
 import com.linecorp.armeria.server.scalapb.ScalaPbRequestConverterFunctionTest._
-import org.assertj.core.api.Assertions.{assertThat, assertThatThrownBy}
+import org.assertj.core.api.Assertions.{assertThat, assertThatExceptionOfType, assertThatThrownBy}
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.`extension`.ExtensionContext
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.{Arguments, ArgumentsProvider, ArgumentsSource}
 import _root_.scalapb.GeneratedMessage
-import _root_.scalapb.json4s.Printer
+import _root_.scalapb.json4s.{JsonFormatException, Printer}
 import testing.scalapb.messages.SimpleRequest
 
 import java.lang.reflect.ParameterizedType
@@ -54,6 +56,39 @@ class ScalaPbRequestConverterFunctionTest {
       converter.convertRequest(ctx, req, classOf[List[_]], parameterizedType)
     })
       .isInstanceOf(classOf[FallthroughException])
+  }
+
+  @Test
+  def invalidProtobuf(): Unit = {
+    val converter = ScalaPbRequestConverterFunction()
+    // A truncated varint tag.
+    val req = AggregatedHttpRequest.of(ctx.request.headers, HttpData.wrap(Array(0xff.toByte, 0xff.toByte)))
+    assertThatExceptionOfType(classOf[IllegalArgumentException])
+      .isThrownBy(() => converter.convertRequest(ctx, req, classOf[SimpleRequest], null))
+      .withCauseInstanceOf(classOf[InvalidProtocolBufferException])
+  }
+
+  @Test
+  def invalidJson(): Unit = {
+    // Not a JSON document.
+    assertInvalidJson("{\"payload\":", classOf[JsonProcessingException])
+    // Not a JSON object.
+    assertInvalidJson("\"payload\":\"Armeria\"}", classOf[JsonFormatException])
+    assertInvalidJson("{\"payload\": {}}", classOf[JsonFormatException])
+  }
+
+  @Test
+  def invalidJsonList(): Unit = {
+    val parameterizedType =
+      new TypeReference[List[SimpleRequest]]() {}.getType.asInstanceOf[ParameterizedType]
+    // Not a JSON array.
+    assertInvalidJson("[{", classOf[JsonProcessingException], classOf[List[_]], parameterizedType)
+    // A valid JSON array of invalid messages.
+    assertInvalidJson(
+      "[{\"size\": \"one\"}]",
+      classOf[JsonFormatException],
+      classOf[List[_]],
+      parameterizedType)
   }
 
   @Test
@@ -130,6 +165,21 @@ private[scalapb] object ScalaPbRequestConverterFunctionTest {
   private val simpleRequest1: SimpleRequest = SimpleRequest("Armeria")
   private val simpleRequest2: SimpleRequest = SimpleRequest("Protobuf")
   private val printer: Printer = new Printer()
+
+  private def assertInvalidJson(
+      json: String,
+      cause: Class[_ <: Throwable],
+      rawType: Class[_] = classOf[SimpleRequest],
+      parameterizedType: ParameterizedType = null): Unit =
+    assertThatExceptionOfType(classOf[IllegalArgumentException])
+      .isThrownBy(() =>
+        ScalaPbRequestConverterFunction().convertRequest(ctx, jsonRequest(json), rawType, parameterizedType))
+      .withCauseInstanceOf(cause)
+
+  private def jsonRequest(json: String): AggregatedHttpRequest =
+    AggregatedHttpRequest.of(
+      ctx.request.headers.withMutations(builder => builder.contentType(MediaType.JSON)),
+      HttpData.ofUtf8(json))
 
   private class JsonArrayRequestProvider extends ArgumentsProvider {
     override def provideArguments(context: ExtensionContext): java.util.stream.Stream[Arguments] = {
