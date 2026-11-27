@@ -109,6 +109,7 @@ final class HttpJsonTranscoderBuilder {
         }
 
         final io.grpc.ServiceDescriptor grpcServiceDescriptor = serviceDefinition.getServiceDescriptor();
+        @Nullable
         final GrpcJsonMarshaller jsonMarshaller = buildJsonMarshaller(grpcServiceDescriptor);
         for (ServerMethodDefinition<?, ?> methodDefinition : serviceDefinition.getMethods()) {
             final Descriptors.MethodDescriptor methodDesc = methodDescriptor(methodDefinition);
@@ -158,6 +159,7 @@ final class HttpJsonTranscoderBuilder {
     }
 
     private void serviceDescriptor(io.grpc.ServiceDescriptor serviceDescriptor) {
+        @Nullable
         final GrpcJsonMarshaller jsonMarshaller = buildJsonMarshaller(serviceDescriptor);
         for (io.grpc.MethodDescriptor<?, ?> grpcMethodDescriptor : serviceDescriptor.getMethods()) {
             final Descriptors.MethodDescriptor methodDesc = methodDescriptor(grpcMethodDescriptor);
@@ -511,7 +513,12 @@ final class HttpJsonTranscoderBuilder {
         }
     }
 
+    @Nullable
     private GrpcJsonMarshaller buildJsonMarshaller(io.grpc.ServiceDescriptor serviceDescriptor) {
+        // The marshaller is used only when the transcoder converts JSON to Protobuf itself.
+        if (!protoSerialization) {
+            return null;
+        }
         return jsonMarshallerFactory.apply(serviceDescriptor);
     }
 
@@ -521,12 +528,13 @@ final class HttpJsonTranscoderBuilder {
         final ServerMethodDefinition<?, ?> definition;
         final Descriptors.MethodDescriptor descriptor;
         final io.grpc.MethodDescriptor<?, ?> grpcMethodDescriptor;
+        @Nullable
         final GrpcJsonMarshaller jsonMarshaller;
 
         HttpJsonGrpcMethod(@Nullable ServerMethodDefinition<?, ?> definition,
                            Descriptors.MethodDescriptor descriptor,
                            io.grpc.MethodDescriptor<?, ?> grpcMethodDescriptor,
-                           GrpcJsonMarshaller jsonMarshaller) {
+                           @Nullable GrpcJsonMarshaller jsonMarshaller) {
             this.definition = definition;
             this.descriptor = descriptor;
             this.grpcMethodDescriptor = grpcMethodDescriptor;
